@@ -1,0 +1,126 @@
+#"Integrating Neural Networks for Color-Based Decision Making in Robotics with Webots"
+#"ColorNN: Neural Network for Color-Driven Robot Control in Webots"
+
+# Dr. Khaled Eskaf
+
+# Import necessary libraries for robot control, numerical operations, neural network creation, and operating system interactions.
+from controller import Robot
+import numpy as np
+from keras.models import Sequential, load_model
+from keras.layers import Dense
+import os #is used to check if the neural network model file (my_model.h5) already exists in the filesystem.
+
+
+#------- Define and Train the Model ------------
+# Define a function to train a neural network model on predefined RGB data.
+def train_model():
+    """
+    Trains a simple neural network using predefined RGB values as input and associated actions as output.
+    The model consists of an input layer, a hidden layer, and an output layer.
+    """
+    # We have some example training data. Each item in this list represents the average
+    # color (in RGB) of some objects our robot might see. The colors are in the format [R, G, B].
+    # The "/ 255.0" part is to normalize these values, so they are between 0 and 1, which is
+    # a format neural networks work well with.
+
+    # Training data representing average RGB values of objects and their associated actions (encoded as one-hot vectors).
+    X_train = np.array([[120, 40, 40], [40, 40, 120], [80, 110, 90]]) / 255.0  # Normalized RGB inputs.
+
+
+    # The labels for our training data. These tell the network what action to take for each color:
+    # [1, 0, 0] means "Turn Right" for the first color, [0, 0, 1] means "Move Backward" for the second color,
+    # and [0, 1, 0] means "Move Forward" for the third color. This is called "one-hot encoding."
+    y_train = np.array([[1, 0, 0], [0, 0, 1], [0, 1, 0]])  # Actions: Turn Right, Move Backward, Move Forward.
+
+    # ------Neural network architecture definition.
+    # Next, we define our neural network's structure. It's a simple one with one input layer,
+    # one hidden layer, and one output layer.
+    model = Sequential([
+        Dense(64, activation='relu', input_dim=3),  # Input layer with ReLU activation.
+        Dense(64, activation='relu'),  # Hidden layer with ReLU activation.
+        Dense(3, activation='softmax')  # Output layer with softmax activation for classification.
+    ])
+
+    # Model compilation.
+    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+    # -------------Model training.
+    # We train (fit) our model on our dataset. We do this for 100 "epochs," which means
+    # the model will see the entire dataset 100 times. We don't print out progress (verbose=0).
+    model.fit(X_train, y_train, epochs=100, verbose=0)
+
+    # ----------Save the trained model for later use.
+    # After training, we save our model to a file so we can use it later without having
+    # to retrain it every time we start our Webots simulation.
+    model.save('my_model.h5')
+
+
+#Step 1: Initialize the Webots Robot
+# Initialize the Webots robot instance.
+robot = Robot()
+
+#Step 2: Check for an Existing Model
+# Check if the model file already exists to avoid retraining.
+if not os.path.exists('my_model.h5'):
+    train_model()  # Train the model if it doesn't exist.
+
+#Step 3: Load the Trained Model
+# Load the trained model.
+model = load_model('my_model.h5')
+
+#Step 4: Initialize Camera and Motors
+# Initialize camera and motors for robot movement control.
+camera = robot.getDevice('camera')
+camera.enable(64)  # Activate the camera.
+left_motor = robot.getDevice('left wheel motor')
+right_motor = robot.getDevice('right wheel motor')
+left_motor.setPosition(float('inf'))  # Set motors to velocity control mode.
+right_motor.setPosition(float('inf'))
+left_motor.setVelocity(0)  # Initialize motor velocity to 0.
+right_motor.setVelocity(0)
+
+
+#Step 5: Define a Function to Process Camera Images and Make Decisions
+# Function to process camera input and decide on an action based on the model's prediction.
+def process_image_and_decide():
+    """
+    Processes the camera image to extract average RGB values, feeds this data into the neural network,
+    and determines the action to take based on the network's prediction.
+    """
+    image = camera.getImageArray()  # Capture the image from the camera.
+    width, height = camera.getWidth(), camera.getHeight()
+
+    # Compute average RGB values of the image.
+    avg_r = avg_g = avg_b = 0
+    for x in range(width):
+        for y in range(height):
+            avg_r += image[x][y][0]
+            avg_g += image[x][y][1]
+            avg_b += image[x][y][2]
+    avg_r /= (width * height)
+    avg_g /= (width * height)
+    avg_b /= (width * height)
+
+    # Normalize and predict the action.
+    input_data = np.array([[avg_r, avg_g, avg_b]]) / 255.0
+    # Use the neural network model to predict the best action based on these colors.
+    prediction = model.predict(input_data)
+    action = np.argmax(prediction)  # Choose the action with the highest predicted probability.# We choose the action with the highest predicted score.
+    
+    return action
+
+#Step 6: Main Simulation Loop
+# Main simulation loop: Process camera input and control the robot based on predictions.
+while robot.step(64) != -1:
+    action = process_image_and_decide()
+
+    # Execute movement based on the predicted action.
+    if action == 0:  # Move Forward
+        left_motor.setVelocity(5.0)
+        right_motor.setVelocity(5.0)
+    elif action == 1:  # Turn Right
+        left_motor.setVelocity(5.0)
+        right_motor.setVelocity(-5.0)
+    elif action == 2:  # Move Backward
+        left_motor.setVelocity(-5.0)
+        right_motor.setVelocity(-5.0)
